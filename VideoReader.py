@@ -4,6 +4,8 @@ import cv2
 class VideoReader:
     def __init__(self, video_file_name):
         self.cap = cv2.VideoCapture(video_file_name)
+        #self.cap.set(cv2.CAP_PROP_POS_FRAMES, 5020)
+
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -21,3 +23,7 @@ class VideoReader:
         self.cur_frame = frame
         self.cur_frame_num = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
         return self.get_cur_frame()
+
+    def close(self):
+        if self.cap:
+            self.cap.release()
