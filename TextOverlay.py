@@ -8,7 +8,7 @@ class TextOverlay(Overlay):
         super().__init__(media, duration, point, duration_diff)
 
     def overlay(self, frame):
-        overlay_text_on_frame(frame, self.media, self.point)
+        overlay_text_on_frame(frame, *self.media, self.point)
         return self.dec_duration()
 
 

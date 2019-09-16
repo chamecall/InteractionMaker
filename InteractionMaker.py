@@ -5,11 +5,12 @@ from VideoReader import VideoReader
 import cv2
 from Media import Media
 from Types import CommandType, MediaType
-from ImageProcessing import overlay_image_on_frame
+from ImageProcessing import draw_det_boxes
 from ImageOverlay import ImageOverlay
 from Recognizer import Recognizer
 from TextOverlay import TextOverlay
 import numpy as np
+from Colors import Color
 
 class InteractionMaker:
 
@@ -74,6 +75,7 @@ class InteractionMaker:
             cur_frame_num = self.video_reader.cur_frame_num
             #detections_per_frame = self.detection_reader.get_detections_per_specified_frame(cur_frame_num)
             _, detections_per_frame = self.recognizer.inference(frame)
+            draw_det_boxes(frame, detections_per_frame)
 
             labels_per_frame = [detection[0] for detection in detections_per_frame]
 
@@ -113,43 +115,48 @@ class InteractionMaker:
         return ImageOverlay(image, command.duration, point, self.video_reader.one_frame_duration)
         
     def generate_text_overlay_object(self, command: Command, point):
-        text = self.read_text_from_file(command.media.file_name)
-        balloon = self.generate_balloon_by_text(text)
-        return ImageOverlay(balloon, command.duration, point, self.video_reader.one_frame_duration)
+        texts = self.read_text_from_file(command.media.file_name)
+        ellipse, text_rect = self.generate_thought_balloon_by_text(texts)
+        return TextOverlay((ellipse, text_rect), command.duration, point, self.video_reader.one_frame_duration)
 
-    def generate_balloon_by_text(self, text: str):
+    def generate_thought_balloon_by_text(self, texts: list):
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 2
-        color = (0, 0, 0)
+        color = Color.BLACK
         thickness = 2
-        (font_width, font_height), shift = cv2.getTextSize(text, font, font_scale, thickness)
-        delta_width = (font_height + shift)
+        LINE_SPACING = 8
+        text_settings = []
+        for text in texts:
+            text = text.rstrip()
+            (text_width, text_height), shift = cv2.getTextSize(text, font, font_scale, thickness)
+            text_height += shift + LINE_SPACING
+            text_settings.append(((text_width, text_height), shift, text))
 
-        y_square = ((font_height + shift) / 2) ** 2
-        x_square = (font_width / 2) ** 2
-        a_square = (font_width / 2 + delta_width) ** 2
+        rect_height = sum([text_size[0][1] for text_size in text_settings]) + LINE_SPACING * (len(texts) - 1)
+        rect_width = max(text_settings, key=lambda text_size: text_size[0][0])[0][0]
+        text_rect = np.ones([rect_height, rect_width, 3], 'uint8') * 255
 
-        ellipse_height = int((y_square / (1 - (x_square / a_square))) ** 0.5 * 2)
-        print(font_height)
-        print(ellipse_height)
-        print(ellipse_height)
-        font_width += delta_width * 2
+        cur_height = -LINE_SPACING
+        for (text_width, text_height), shift, text in text_settings:
+            cur_height += text_height
+            cur_width = (rect_width - text_width) // 2
+            cv2.putText(text_rect, text, (cur_width, cur_height), font, font_scale, color, thickness)
 
-        black_rect = np.zeros([ellipse_height, font_width, 3])
-        cv2.ellipse(black_rect, (int(black_rect.shape[1] / 2), int(black_rect.shape[0] / 2)),
-                    (int(black_rect.shape[1]/2), int(black_rect.shape[0]/2)), 0, 0, 360, (0, 0, 255), -1)
-        text_y_position = int(((ellipse_height - font_height) / 2) + font_height)
-        text_x_position = delta_width
-        cv2.putText(black_rect, text, (text_x_position, text_y_position), font, font_scale, (255, 255, 0), thickness)
+        half_rect_width = rect_width // 2
+        half_rect_height = rect_height // 2
+        ellipse_height_delta = rect_height // 4
+        ellipse_points = [(half_rect_width, half_rect_height), (-half_rect_width, half_rect_height), (-half_rect_width,
+                                                                                                      -half_rect_height),
+                          (half_rect_width, -half_rect_height), (0, half_rect_height + ellipse_height_delta)]
 
-        return black_rect
-
-
+        ellipse_points = np.array(ellipse_points)
+        ellipse = cv2.fitEllipse(ellipse_points)
+        return ellipse, text_rect
         
     def read_text_from_file(self, txt_file):
         with open(txt_file) as txt:
-            text = txt.read()
-        return text
+            texts = txt.readlines()
+        return texts
 
     def close(self):
         if self.video_reader:
