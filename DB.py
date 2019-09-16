@@ -84,6 +84,8 @@ class DB:
         self.exec_query(f'''CREATE TABLE IF NOT EXISTS `Command` (
               `command_id` INT(11) NOT NULL,
                 `name` VARCHAR(128) NOT NULL,
+                `centered` BOOLEAN NOT NULL DEFAULT false,
+                `trigger_command_id` INT(11) NULL,
               `type` VARCHAR(128) NOT NULL,
               `trigger_event_id` INT NOT NULL,
               `attached_character_class` INT NOT NULL,
@@ -91,6 +93,7 @@ class DB:
               `command_type_id` INT NOT NULL,
               `media_id` INT NOT NULL,
               `duration` INT NOT NULL,
+                `delay` INT NOT NULL DEFAULT 1000,
               PRIMARY KEY (`command_id`),
               INDEX `fk_Command_1_idx` (`media_id` ASC),
               INDEX `fk_Command_2_idx` (`command_type_id` ASC),

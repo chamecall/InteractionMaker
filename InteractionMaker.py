@@ -52,20 +52,25 @@ class InteractionMaker:
             query = "SELECT name FROM Labels WHERE label_id=%s"
             attached_character_class = \
             self.data_base.exec_template_query(query, [command_response['attached_character_class']]).fetchone()['name']
-            relation_class = self.data_base.exec_template_query(query, [command_response['relation_class']]).fetchone()[
+            relation_class = ''
+            if command_response['relation_class'] is not None:
+                relation_class = self.data_base.exec_template_query(query, [command_response['relation_class']]).fetchone()[
                 'name']
+
             media_response = self.data_base.exec_query(
                 f"SELECT * FROM Media WHERE media_id={command_response['media_id']}").fetchone()
             media = Media(media_response['file_name'], media_response['type'], media_response['duration'])
 
-            command = Command(command_response['name'], command_response['type'], command_response['trigger_event_id'],
-                              attached_character_class,
-                              relation_class, CommandType(command_response['command_type_id']), media,
-                              command_response['duration'])
-            self.commands.append(command)
+            trigger_cmd_name = ''
+            trigger_cmd_id = command_response['trigger_event_id']
+            if trigger_cmd_id:
+                trigger_cmd_name = self.data_base.exec_query(f"SELECT name FROM Command WHERE command_id={trigger_cmd_id}").fetchone()['name']
 
-        # now we use just one command
-        self.commands = self.commands[:1]
+            delay = command_response['init_delay']
+            command = Command(command_response['name'], command_response['centered'], command_response['type'], command_response['trigger_event_id'],
+                              attached_character_class, relation_class, CommandType(command_response['command_type_id']),
+                                trigger_cmd_name, media, command_response['duration'], delay)
+            self.commands.append(command)
 
     def process_commands(self):
         while True:
@@ -78,46 +83,76 @@ class InteractionMaker:
             draw_det_boxes(frame, detections_per_frame)
 
             labels_per_frame = [detection[0] for detection in detections_per_frame]
-
-            for command in [command for command in self.commands if not command.executing]:
+            for command in self.commands:
                 self.check_command_type(command, detections_per_frame, labels_per_frame)
 
-            for command in [command for command in self.commands if command.executing]:
-                command.exec(frame)
+            for active_cmd in [cmd for cmd in self.commands if cmd.executing]:
+                active_cmd.exec(frame)
 
             cv2.imshow('frame', frame)
             self.video_writer.write(frame)
             cv2.waitKey(1)
 
+
+
     def check_command_type(self, command, detections_per_frame, labels_per_frame):
         if command.command_type == CommandType.OBJECT_ON_THE_SCREEN:
             self.check_object_on_the_screen_event(command, detections_per_frame, labels_per_frame)
+        elif command.command_type == CommandType.REACTIONS_CHAIN:
+            self.check_reactions_chain_event(command, detections_per_frame, labels_per_frame)
+
+
+    def check_reactions_chain_event(self, command: Command, detections_per_frame, labels_per_frame):
+        #there's main object
+        if command.attached_character_class in labels_per_frame:
+            #check whether triggered command is active
+            active_command_names = [command.name for command in self.commands if command.executing]
+            if command.trigger_cmd_name in active_command_names:
+                self.custom_method(command, detections_per_frame, labels_per_frame)
+
+
+
+    def custom_method(self, command: Command, detections_per_frame, labels_per_frame):
+        main_box = detections_per_frame[labels_per_frame.index(command.attached_character_class)][1]
+        coords = main_box
+
+        if command.centered:
+            secondary_box = detections_per_frame[labels_per_frame.index(command.relation_class)][1]
+            main_box_center = [(main_box[i + 2] + main_box[i]) // 2 for i in range(2)]
+            secondary_box_center = [(secondary_box[i + 2] + secondary_box[i]) // 2 for i in range(2)]
+            boxes_center = [(main_box_center[i] + secondary_box_center[i]) // 2 for i in range(2)]
+            coords = boxes_center
+
+        if command.executing:
+            command.overlay.set_coords(coords)
+        else:
+            if command.media.type == MediaType.IMAGE:
+                command.overlay = self.generate_image_overlay_object(command, coords)
+            elif command.media.type == MediaType.TEXT:
+                command.overlay = self.generate_text_overlay_object(command, coords)
+
+            command.mark_as_executing()
 
     def check_object_on_the_screen_event(self, command: Command, detections_per_frame, labels_per_frame):
 
         desired_classes = {command.attached_character_class, command.relation_class}
         # we found desired labels
         if desired_classes.issubset(labels_per_frame):
+            self.custom_method(command, detections_per_frame, labels_per_frame)
 
-            main_character_box = \
-                detections_per_frame[labels_per_frame.index(command.attached_character_class)][1]
-            main_character_box = list(map(int, main_character_box))
-            top_right_box_point = main_character_box[2], main_character_box[1]
-            if command.media.type == MediaType.IMAGE:
-                command.overlay = self.generate_image_overlay_object(command, top_right_box_point)
-            elif command.media.type == MediaType.TEXT:
-                command.overlay = self.generate_text_overlay_object(command, top_right_box_point)
-
-            command.mark_as_executing()
-
-    def generate_image_overlay_object(self, command: Command, point):
+    def generate_image_overlay_object(self, command: Command, coords: tuple):
         image = cv2.imread(command.media.file_name)
-        return ImageOverlay(image, command.duration, point, self.video_reader.one_frame_duration)
+        delay = command.delay
+        command.drop_delay()
+        return ImageOverlay(image, command.duration, delay, coords, self.video_reader.one_frame_duration)
+
         
-    def generate_text_overlay_object(self, command: Command, point):
+    def generate_text_overlay_object(self, command: Command, coords: tuple):
         texts = self.read_text_from_file(command.media.file_name)
         ellipse, text_rect = self.generate_thought_balloon_by_text(texts)
-        return TextOverlay((ellipse, text_rect), command.duration, point, self.video_reader.one_frame_duration)
+        delay = command.delay
+        command.drop_delay()
+        return TextOverlay((ellipse, text_rect), command.duration, delay, coords, self.video_reader.one_frame_duration)
 
     def generate_thought_balloon_by_text(self, texts: list):
         font = cv2.FONT_HERSHEY_SIMPLEX

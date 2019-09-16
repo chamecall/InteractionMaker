@@ -9,7 +9,7 @@ from mmdet.apis import inference_detector, show_result, init_detector
 
 
 class Recognizer:
-    def __init__(self, cfg, weights, threshold=0.8):
+    def __init__(self, cfg, weights, threshold=0.9):
         self.cfg = cfg
         self.weights = weights
         self.threshold = threshold
@@ -18,11 +18,8 @@ class Recognizer:
 
     def inference(self, img):
         result = inference_detector(self.model, img)
-        img, label_nums, bboxes = show_result(img, result, self.model.CLASSES,
-                    score_thr=self.threshold, show=False)
-        bboxes = [list(map(int, bbox[:-1])) for bbox in bboxes]
-        labels = [self.model.CLASSES[label_num] for label_num in label_nums]
-        bboxes = list(zip(labels, bboxes))
+        img, label_nums, bboxes = show_result(img, result, self.model.CLASSES, show=False)
 
+        bboxes = [(self.model.CLASSES[label_num], list(map(int, bbox[:-1]))) for label_num, bbox in zip(label_nums, bboxes) if bbox[4] >= self.threshold]
         return img, bboxes
 

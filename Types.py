@@ -8,3 +8,4 @@ class MediaType(Enum):
 
 class CommandType(Enum):
     OBJECT_ON_THE_SCREEN = 0
+    REACTIONS_CHAIN = 1
