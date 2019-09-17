@@ -1,11 +1,10 @@
 
 class Overlay:
-    def __init__(self, media, duration, delay, coords: tuple, duration_diff):
+    def __init__(self, media, duration, coords: tuple, duration_diff):
         self.media = media
         self.duration = duration
         self.duration_step = duration_diff
         self.coords = coords
-        self.delay = delay
 
     def overlay(self, frame):
         raise NotImplementedError
@@ -18,7 +17,3 @@ class Overlay:
     def set_coords(self, coords):
         self.coords = coords
 
-    def dec_delay(self):
-        self.delay -= self.duration_step
-        print(self.delay)
-        return self.delay > 0

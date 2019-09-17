@@ -14,6 +14,8 @@ from Colors import Color
 
 class InteractionMaker:
 
+
+
     def __init__(self):
         self.detection_reader = DetectionReader('detections.json')
         self.project_file_name = '/home/algernon/lol'
@@ -86,7 +88,7 @@ class InteractionMaker:
             for command in self.commands:
                 self.check_command_type(command, detections_per_frame, labels_per_frame)
 
-            for active_cmd in [cmd for cmd in self.commands if cmd.executing]:
+            for active_cmd in [cmd for cmd in self.commands if cmd.cur_state == cmd.State.EXECUTING]:
                 active_cmd.exec(frame)
 
             cv2.imshow('frame', frame)
@@ -106,7 +108,7 @@ class InteractionMaker:
         #there's main object
         if command.attached_character_class in labels_per_frame:
             #check whether triggered command is active
-            active_command_names = [command.name for command in self.commands if command.executing]
+            active_command_names = [command.name for command in self.commands if command.cur_state == command.State.EXECUTING]
             if command.trigger_cmd_name in active_command_names:
                 self.custom_method(command, detections_per_frame, labels_per_frame)
 
@@ -122,8 +124,9 @@ class InteractionMaker:
             secondary_box_center = [(secondary_box[i + 2] + secondary_box[i]) // 2 for i in range(2)]
             boxes_center = [(main_box_center[i] + secondary_box_center[i]) // 2 for i in range(2)]
             coords = boxes_center
-
-        if command.executing:
+        print('state')
+        print(command.cur_state)
+        if command.cur_state == command.State.EXECUTING:
             command.overlay.set_coords(coords)
         else:
             if command.media.type == MediaType.IMAGE:
@@ -142,17 +145,15 @@ class InteractionMaker:
 
     def generate_image_overlay_object(self, command: Command, coords: tuple):
         image = cv2.imread(command.media.file_name)
-        delay = command.delay
-        command.drop_delay()
-        return ImageOverlay(image, command.duration, delay, coords, self.video_reader.one_frame_duration)
+
+        return ImageOverlay(image, command.duration, coords, self.video_reader.one_frame_duration)
 
         
     def generate_text_overlay_object(self, command: Command, coords: tuple):
         texts = self.read_text_from_file(command.media.file_name)
         ellipse, text_rect = self.generate_thought_balloon_by_text(texts)
-        delay = command.delay
-        command.drop_delay()
-        return TextOverlay((ellipse, text_rect), command.duration, delay, coords, self.video_reader.one_frame_duration)
+
+        return TextOverlay((ellipse, text_rect), command.duration, coords, self.video_reader.one_frame_duration)
 
     def generate_thought_balloon_by_text(self, texts: list):
         font = cv2.FONT_HERSHEY_SIMPLEX
