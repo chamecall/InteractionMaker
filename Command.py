@@ -1,14 +1,11 @@
-from Media import Media
-from Types import CommandType
-from ImageProcessing import overlay_image_on_frame_by_box
-from Types import CommandType, MediaType
-import cv2
-from ImageOverlay import ImageOverlay
 from enum import Enum, auto
+
+from Media import Media
 from Timer import Timer
+from Types import CommandType
+
 
 class Command:
-
     class State(str, Enum):
         WAITING = auto()
         EXECUTING = auto()
@@ -32,7 +29,6 @@ class Command:
         self.cur_state = self.State.WAITING
         self.overlay = None
 
-
     def set_as_executing(self):
         self.cur_state = self.State.EXECUTING
 
@@ -54,5 +50,3 @@ class Command:
     def wait_out_delay(self):
         delay_is_over = self.delay_timer.ticktock()
         return delay_is_over
-
-

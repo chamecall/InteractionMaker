@@ -56,3 +56,47 @@ def overlay_text_on_frame(frame, ellipse: list, text_rect: np.ndarray, box: tupl
 def draw_det_boxes(frame, boxes):
     for box in boxes:
         cv2.rectangle(frame, tuple(box[1][:2]), tuple(box[1][2:]), Color.YELLOW, 5)
+
+
+def generate_thought_balloon_by_text(texts: list):
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 2
+    color = Color.BLACK
+    thickness = 2
+    LINE_SPACING = 8
+    text_settings = []
+    for text in texts:
+        text = text.rstrip()
+        (text_width, text_height), shift = cv2.getTextSize(text, font, font_scale, thickness)
+        text_height += shift + LINE_SPACING
+        text_settings.append(((text_width, text_height), shift, text))
+
+    rect_height = sum([text_size[0][1] for text_size in text_settings]) + LINE_SPACING * (len(texts) - 1)
+    rect_width = max(text_settings, key=lambda text_size: text_size[0][0])[0][0]
+    text_rect = np.ones([rect_height, rect_width, 3], 'uint8') * 255
+
+    cur_height = -LINE_SPACING
+    for (text_width, text_height), shift, text in text_settings:
+        cur_height += text_height
+        cur_width = (rect_width - text_width) // 2
+        cv2.putText(text_rect, text, (cur_width, cur_height), font, font_scale, color, thickness)
+
+    half_rect_width = rect_width // 2
+    half_rect_height = rect_height // 2
+    ellipse_height_delta = rect_height // 4
+    ellipse_points = [(half_rect_width, half_rect_height), (-half_rect_width, half_rect_height), (-half_rect_width,
+                                                                                                  -half_rect_height),
+                      (half_rect_width, -half_rect_height), (0, half_rect_height + ellipse_height_delta)]
+
+    ellipse_points = np.array(ellipse_points)
+    ellipse = cv2.fitEllipse(ellipse_points)
+    return ellipse, text_rect
+
+
+def overlay_img_in_top_right_frame_corner(frame, image):
+    print('frame shape', frame.shape)
+    print('image shape', image.shape)
+    frame_height, frame_width, _ = frame.shape
+    image_height, image_width, _ = image.shape
+    assert image_height <= frame_height and image_width <= frame_width
+    frame[:image_height, frame_width-image_width:] = image

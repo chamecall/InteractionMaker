@@ -1,17 +1,16 @@
-from DetectionReader import DetectionReader
-from DB import DB
-from Command import Command
-from VideoReader import VideoReader
 import cv2
-from Media import Media
-from Types import CommandType, MediaType
-from ImageProcessing import draw_det_boxes
+
+from Command import Command
+from DB import DB
+from DetectionReader import DetectionReader
 from ImageOverlay import ImageOverlay
+from ImageProcessing import draw_det_boxes, generate_thought_balloon_by_text
+from Media import Media
 from Recognizer import Recognizer
 from TextOverlay import TextOverlay
-import numpy as np
-from Colors import Color
-
+from Types import CommandType, MediaType
+from VideoReader import VideoReader
+from VideoOverlay import VideoOverlay
 
 class InteractionMaker:
 
@@ -82,20 +81,17 @@ class InteractionMaker:
 
     def process_commands(self):
         while True:
-
             frame = self.video_reader.get_next_frame()
-            # for cmd in self.commands:
-            #     print(cmd.name, cmd.cur_state)
-            # print('______________')
-
             cur_frame_num = self.video_reader.cur_frame_num
             # detections_per_frame = self.detection_reader.get_detections_per_specified_frame(cur_frame_num)
             _, detections_per_frame = self.recognizer.inference(frame)
             draw_det_boxes(frame, detections_per_frame)
 
             labels_per_frame = [detection[0] for detection in detections_per_frame]
-            states_needed_to_be_checked_on_event = [Command.State.WAITING, Command.State.EXECUTING, Command.State.AFTER_DELAYING]
-            commands_needed_to_be_checked_on_event = [cmd for cmd in self.commands if cmd.cur_state in states_needed_to_be_checked_on_event]
+            states_needed_to_be_checked_on_event = [Command.State.WAITING, Command.State.EXECUTING,
+                                                    Command.State.AFTER_DELAYING]
+            commands_needed_to_be_checked_on_event = [cmd for cmd in self.commands if
+                                                      cmd.cur_state in states_needed_to_be_checked_on_event]
             for command in commands_needed_to_be_checked_on_event:
                 self.update_commands(command, detections_per_frame, labels_per_frame)
 
@@ -107,7 +103,6 @@ class InteractionMaker:
             for delaying_command in delaying_commands:
                 if delaying_command.wait_out_delay():
                     delaying_command.set_as_after_delay()
-
 
             cv2.imshow('frame', frame)
             self.video_writer.write(frame)
@@ -126,15 +121,8 @@ class InteractionMaker:
 
             active_command_names = [command.name for command in self.commands if
                                     command.cur_state == command.State.EXECUTING]
-
-            # print(command.trigger_cmd_name)
-            # print(active_command_names)
-            # print('__________________')
-
-
             event_happened = command.trigger_cmd_name in active_command_names
             self.update_state(event_happened, command, detections_per_frame, labels_per_frame)
-
 
     def check_object_on_the_screen_event(self, command: Command, detections_per_frame, labels_per_frame):
 
@@ -142,7 +130,6 @@ class InteractionMaker:
         # we found desired labels
         event_happened = desired_classes.issubset(labels_per_frame)
         self.update_state(event_happened, command, detections_per_frame, labels_per_frame)
-
 
     def update_state(self, event_happened, command, detections_per_frame, labels_per_frame):
         if event_happened:
@@ -154,8 +141,11 @@ class InteractionMaker:
             if command.cur_state == command.State.EXECUTING:
                 command.overlay.set_coords(coords)
 
+            # extract later this part from update_commands method
             if command.cur_state == command.State.AFTER_DELAYING:
-                if command.media.type == MediaType.IMAGE:
+                if command.media.type == MediaType.VIDEO:
+                    command.overlay = self.generate_video_overlay(command, coords)
+                elif command.media.type == MediaType.IMAGE:
                     command.overlay = self.generate_image_overlay_object(command, coords)
                 elif command.media.type == MediaType.TEXT:
                     command.overlay = self.generate_text_overlay_object(command, coords)
@@ -164,8 +154,8 @@ class InteractionMaker:
         elif command.cur_state == command.cur_state.AFTER_DELAYING:
             command.set_as_waiting()
 
-
-    def get_coords(self, command: Command, detections_per_frame, labels_per_frame):
+    @staticmethod
+    def get_coords(command: Command, detections_per_frame, labels_per_frame):
         main_box = detections_per_frame[labels_per_frame.index(command.attached_character_class)][1]
         coords = main_box
 
@@ -178,6 +168,11 @@ class InteractionMaker:
 
         return coords
 
+    def generate_video_overlay(self, command: Command, coords: tuple):
+        video_cap = cv2.VideoCapture(command.media.file_name)
+        duration = command.media.duration if command.duration == 0 else command.duration
+        return VideoOverlay(video_cap, duration, coords, self.video_reader.one_frame_duration)
+
 
     def generate_image_overlay_object(self, command: Command, coords: tuple):
         image = cv2.imread(command.media.file_name)
@@ -185,43 +180,9 @@ class InteractionMaker:
 
     def generate_text_overlay_object(self, command: Command, coords: tuple):
         texts = self.read_text_from_file(command.media.file_name)
-        ellipse, text_rect = self.generate_thought_balloon_by_text(texts)
+        ellipse, text_rect = generate_thought_balloon_by_text(texts)
 
         return TextOverlay((ellipse, text_rect), command.duration, coords, self.video_reader.one_frame_duration)
-
-    def generate_thought_balloon_by_text(self, texts: list):
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 2
-        color = Color.BLACK
-        thickness = 2
-        LINE_SPACING = 8
-        text_settings = []
-        for text in texts:
-            text = text.rstrip()
-            (text_width, text_height), shift = cv2.getTextSize(text, font, font_scale, thickness)
-            text_height += shift + LINE_SPACING
-            text_settings.append(((text_width, text_height), shift, text))
-
-        rect_height = sum([text_size[0][1] for text_size in text_settings]) + LINE_SPACING * (len(texts) - 1)
-        rect_width = max(text_settings, key=lambda text_size: text_size[0][0])[0][0]
-        text_rect = np.ones([rect_height, rect_width, 3], 'uint8') * 255
-
-        cur_height = -LINE_SPACING
-        for (text_width, text_height), shift, text in text_settings:
-            cur_height += text_height
-            cur_width = (rect_width - text_width) // 2
-            cv2.putText(text_rect, text, (cur_width, cur_height), font, font_scale, color, thickness)
-
-        half_rect_width = rect_width // 2
-        half_rect_height = rect_height // 2
-        ellipse_height_delta = rect_height // 4
-        ellipse_points = [(half_rect_width, half_rect_height), (-half_rect_width, half_rect_height), (-half_rect_width,
-                                                                                                      -half_rect_height),
-                          (half_rect_width, -half_rect_height), (0, half_rect_height + ellipse_height_delta)]
-
-        ellipse_points = np.array(ellipse_points)
-        ellipse = cv2.fitEllipse(ellipse_points)
-        return ellipse, text_rect
 
     def read_text_from_file(self, txt_file):
         with open(txt_file) as txt:
