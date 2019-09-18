@@ -12,9 +12,8 @@ from TextOverlay import TextOverlay
 import numpy as np
 from Colors import Color
 
+
 class InteractionMaker:
-
-
 
     def __init__(self):
         self.detection_reader = DetectionReader('detections.json')
@@ -31,8 +30,9 @@ class InteractionMaker:
         self.video_reader = None
         self.video_writer = None
         self.open_project()
-        self.recognizer = Recognizer('/home/algernon/PycharmProjects/AIVlog/mmdetection/configs/pascal_voc/faster_rcnn_r50_fpn_1x_voc0712.py', '/home/algernon/PycharmProjects/AIVlog/mmdetection/work_dirs/faster_rcnn_r50_fpn_1x_voc0712/epoch_10.pth')
-
+        self.recognizer = Recognizer(
+            '/home/algernon/PycharmProjects/AIVlog/mmdetection/configs/pascal_voc/faster_rcnn_r50_fpn_1x_voc0712.py',
+            '/home/algernon/PycharmProjects/AIVlog/mmdetection/work_dirs/faster_rcnn_r50_fpn_1x_voc0712/epoch_10.pth')
 
     def open_project(self):
         with open(self.project_file_name, 'r') as project_file:
@@ -53,11 +53,13 @@ class InteractionMaker:
             command_response = cursor.fetchone()
             query = "SELECT name FROM Labels WHERE label_id=%s"
             attached_character_class = \
-            self.data_base.exec_template_query(query, [command_response['attached_character_class']]).fetchone()['name']
+                self.data_base.exec_template_query(query, [command_response['attached_character_class']]).fetchone()[
+                    'name']
             relation_class = ''
             if command_response['relation_class'] is not None:
-                relation_class = self.data_base.exec_template_query(query, [command_response['relation_class']]).fetchone()[
-                'name']
+                relation_class = \
+                    self.data_base.exec_template_query(query, [command_response['relation_class']]).fetchone()[
+                        'name']
 
             media_response = self.data_base.exec_query(
                 f"SELECT * FROM Media WHERE media_id={command_response['media_id']}").fetchone()
@@ -66,55 +68,104 @@ class InteractionMaker:
             trigger_cmd_name = ''
             trigger_cmd_id = command_response['trigger_event_id']
             if trigger_cmd_id:
-                trigger_cmd_name = self.data_base.exec_query(f"SELECT name FROM Command WHERE command_id={trigger_cmd_id}").fetchone()['name']
+                trigger_cmd_name = \
+                    self.data_base.exec_query(f"SELECT name FROM Command WHERE command_id={trigger_cmd_id}").fetchone()[
+                        'name']
 
             delay = command_response['init_delay']
-            command = Command(command_response['name'], command_response['centered'], command_response['type'], command_response['trigger_event_id'],
-                              attached_character_class, relation_class, CommandType(command_response['command_type_id']),
-                                trigger_cmd_name, media, command_response['duration'], delay)
+            command = Command(command_response['name'], command_response['centered'], command_response['type'],
+                              command_response['trigger_event_id'],
+                              attached_character_class, relation_class,
+                              CommandType(command_response['command_type_id']),
+                              trigger_cmd_name, media, command_response['duration'], delay)
             self.commands.append(command)
 
     def process_commands(self):
         while True:
 
             frame = self.video_reader.get_next_frame()
+            # for cmd in self.commands:
+            #     print(cmd.name, cmd.cur_state)
+            # print('______________')
 
             cur_frame_num = self.video_reader.cur_frame_num
-            #detections_per_frame = self.detection_reader.get_detections_per_specified_frame(cur_frame_num)
+            # detections_per_frame = self.detection_reader.get_detections_per_specified_frame(cur_frame_num)
             _, detections_per_frame = self.recognizer.inference(frame)
             draw_det_boxes(frame, detections_per_frame)
 
             labels_per_frame = [detection[0] for detection in detections_per_frame]
-            for command in self.commands:
-                self.check_command_type(command, detections_per_frame, labels_per_frame)
+            states_needed_to_be_checked_on_event = [Command.State.WAITING, Command.State.EXECUTING, Command.State.AFTER_DELAYING]
+            commands_needed_to_be_checked_on_event = [cmd for cmd in self.commands if cmd.cur_state in states_needed_to_be_checked_on_event]
+            for command in commands_needed_to_be_checked_on_event:
+                self.update_commands(command, detections_per_frame, labels_per_frame)
 
-            for active_cmd in [cmd for cmd in self.commands if cmd.cur_state == cmd.State.EXECUTING]:
+            executing_commands = [cmd for cmd in self.commands if cmd.cur_state == cmd.State.EXECUTING]
+            for active_cmd in executing_commands:
                 active_cmd.exec(frame)
+
+            delaying_commands = [cmd for cmd in self.commands if cmd.cur_state == cmd.State.DELAYING]
+            for delaying_command in delaying_commands:
+                if delaying_command.wait_out_delay():
+                    delaying_command.set_as_after_delay()
+
 
             cv2.imshow('frame', frame)
             self.video_writer.write(frame)
             cv2.waitKey(1)
 
-
-
-    def check_command_type(self, command, detections_per_frame, labels_per_frame):
+    def update_commands(self, command, detections_per_frame, labels_per_frame):
         if command.command_type == CommandType.OBJECT_ON_THE_SCREEN:
             self.check_object_on_the_screen_event(command, detections_per_frame, labels_per_frame)
         elif command.command_type == CommandType.REACTIONS_CHAIN:
             self.check_reactions_chain_event(command, detections_per_frame, labels_per_frame)
 
-
     def check_reactions_chain_event(self, command: Command, detections_per_frame, labels_per_frame):
-        #there's main object
+        # there's main object
         if command.attached_character_class in labels_per_frame:
-            #check whether triggered command is active
-            active_command_names = [command.name for command in self.commands if command.cur_state == command.State.EXECUTING]
-            if command.trigger_cmd_name in active_command_names:
-                self.custom_method(command, detections_per_frame, labels_per_frame)
+            # check whether triggered command is active
+
+            active_command_names = [command.name for command in self.commands if
+                                    command.cur_state == command.State.EXECUTING]
+
+            # print(command.trigger_cmd_name)
+            # print(active_command_names)
+            # print('__________________')
 
 
+            event_happened = command.trigger_cmd_name in active_command_names
+            self.update_state(event_happened, command, detections_per_frame, labels_per_frame)
 
-    def custom_method(self, command: Command, detections_per_frame, labels_per_frame):
+
+    def check_object_on_the_screen_event(self, command: Command, detections_per_frame, labels_per_frame):
+
+        desired_classes = {command.attached_character_class, command.relation_class}
+        # we found desired labels
+        event_happened = desired_classes.issubset(labels_per_frame)
+        self.update_state(event_happened, command, detections_per_frame, labels_per_frame)
+
+
+    def update_state(self, event_happened, command, detections_per_frame, labels_per_frame):
+        if event_happened:
+            if command.cur_state == command.State.WAITING:
+                command.set_as_delaying(self.video_reader.one_frame_duration)
+                return
+
+            coords = self.get_coords(command, detections_per_frame, labels_per_frame)
+            if command.cur_state == command.State.EXECUTING:
+                command.overlay.set_coords(coords)
+
+            if command.cur_state == command.State.AFTER_DELAYING:
+                if command.media.type == MediaType.IMAGE:
+                    command.overlay = self.generate_image_overlay_object(command, coords)
+                elif command.media.type == MediaType.TEXT:
+                    command.overlay = self.generate_text_overlay_object(command, coords)
+                command.set_as_executing()
+
+        elif command.cur_state == command.cur_state.AFTER_DELAYING:
+            command.set_as_waiting()
+
+
+    def get_coords(self, command: Command, detections_per_frame, labels_per_frame):
         main_box = detections_per_frame[labels_per_frame.index(command.attached_character_class)][1]
         coords = main_box
 
@@ -124,31 +175,14 @@ class InteractionMaker:
             secondary_box_center = [(secondary_box[i + 2] + secondary_box[i]) // 2 for i in range(2)]
             boxes_center = [(main_box_center[i] + secondary_box_center[i]) // 2 for i in range(2)]
             coords = boxes_center
-        print('state')
-        print(command.cur_state)
-        if command.cur_state == command.State.EXECUTING:
-            command.overlay.set_coords(coords)
-        else:
-            if command.media.type == MediaType.IMAGE:
-                command.overlay = self.generate_image_overlay_object(command, coords)
-            elif command.media.type == MediaType.TEXT:
-                command.overlay = self.generate_text_overlay_object(command, coords)
 
-            command.mark_as_executing()
+        return coords
 
-    def check_object_on_the_screen_event(self, command: Command, detections_per_frame, labels_per_frame):
-
-        desired_classes = {command.attached_character_class, command.relation_class}
-        # we found desired labels
-        if desired_classes.issubset(labels_per_frame):
-            self.custom_method(command, detections_per_frame, labels_per_frame)
 
     def generate_image_overlay_object(self, command: Command, coords: tuple):
         image = cv2.imread(command.media.file_name)
-
         return ImageOverlay(image, command.duration, coords, self.video_reader.one_frame_duration)
 
-        
     def generate_text_overlay_object(self, command: Command, coords: tuple):
         texts = self.read_text_from_file(command.media.file_name)
         ellipse, text_rect = self.generate_thought_balloon_by_text(texts)
@@ -188,7 +222,7 @@ class InteractionMaker:
         ellipse_points = np.array(ellipse_points)
         ellipse = cv2.fitEllipse(ellipse_points)
         return ellipse, text_rect
-        
+
     def read_text_from_file(self, txt_file):
         with open(txt_file) as txt:
             texts = txt.readlines()
