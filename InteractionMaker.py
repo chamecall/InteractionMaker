@@ -1,22 +1,24 @@
 import cv2
 
+from Colors import Color
 from Command import Command
 from DB import DB
 from DetectionReader import DetectionReader
+from Enums import CommandType, MediaType
 from ImageOverlay import ImageOverlay
 from ImageProcessing import draw_det_boxes, generate_thought_balloon_by_text
 from Media import Media
 from Recognizer import Recognizer
 from TextOverlay import TextOverlay
-from Types import CommandType, MediaType
-from VideoReader import VideoReader
 from VideoOverlay import VideoOverlay
+from VideoReader import VideoReader
+from pprint import pprint
 
 class InteractionMaker:
 
     def __init__(self):
         self.detection_reader = DetectionReader('detections.json')
-        self.project_file_name = '/home/algernon/lol'
+        self.project_file_name = '/home/algernon/andro2'
         self.video_file_name = ''
         self.db_name = ''
         self.data_base = None
@@ -28,6 +30,8 @@ class InteractionMaker:
         self.output_video_file_name = 'output.mkv'
         self.video_reader = None
         self.video_writer = None
+        self.emotion_detection_reader = DetectionReader('emotion_results/er.json')
+
         self.open_project()
         self.recognizer = Recognizer(
             '/home/algernon/PycharmProjects/AIVlog/mmdetection/configs/pascal_voc/faster_rcnn_r50_fpn_1x_voc0712.py',
@@ -66,34 +70,53 @@ class InteractionMaker:
 
             trigger_cmd_name = ''
             trigger_cmd_id = command_response['trigger_event_id']
-            if trigger_cmd_id:
+            if trigger_cmd_id is not None:
                 trigger_cmd_name = \
                     self.data_base.exec_query(f"SELECT name FROM Command WHERE command_id={trigger_cmd_id}").fetchone()[
                         'name']
 
-            delay = command_response['init_delay']
-            command = Command(command_response['name'], command_response['centered'], command_response['type'],
+            delay = command_response['delay']
+
+            emotion = ''
+            emotion_id = command_response['expected_emotion_id']
+            if emotion_id is not None:
+                emotion = \
+                self.data_base.exec_query(f"SELECT name FROM Emotion WHERE emotion_id={emotion_id}").fetchone()['name']
+
+            command = Command(command_response['name'], command_response['centered'],
                               command_response['trigger_event_id'],
                               attached_character_class, relation_class,
                               CommandType(command_response['command_type_id']),
-                              trigger_cmd_name, media, command_response['duration'], delay)
+                              trigger_cmd_name, media, command_response['duration'], delay, emotion)
             self.commands.append(command)
+
 
     def process_commands(self):
         while True:
             frame = self.video_reader.get_next_frame()
             cur_frame_num = self.video_reader.cur_frame_num
             # detections_per_frame = self.detection_reader.get_detections_per_specified_frame(cur_frame_num)
-            _, detections_per_frame = self.recognizer.inference(frame)
-            draw_det_boxes(frame, detections_per_frame)
+            emotion_detections_per_frame = self.emotion_detection_reader.get_detections_per_specified_frame(
+                cur_frame_num - 1)
+            emotions_per_frame = []
+            for person in emotion_detections_per_frame:
+                possible_emotions = person['emotions']
+                most_possible_emotion = max(possible_emotions, key=lambda emotion: emotion[0])
+                start_point = person['x'], person['y']
+                end_point = start_point[0] + person['w'], start_point[1] + person['h']
+                emotions_per_frame.append((start_point, end_point, most_possible_emotion))
+                self.draw_emotion_box(frame, start_point, end_point, most_possible_emotion)
 
-            labels_per_frame = [detection[0] for detection in detections_per_frame]
+            _, object_detections_per_frame = self.recognizer.inference(frame)
+            draw_det_boxes(frame, object_detections_per_frame)
+
+            labels_per_frame = [detection[0] for detection in object_detections_per_frame]
             states_needed_to_be_checked_on_event = [Command.State.WAITING, Command.State.EXECUTING,
                                                     Command.State.AFTER_DELAYING]
             commands_needed_to_be_checked_on_event = [cmd for cmd in self.commands if
                                                       cmd.cur_state in states_needed_to_be_checked_on_event]
             for command in commands_needed_to_be_checked_on_event:
-                self.update_commands(command, detections_per_frame, labels_per_frame)
+                self.update_commands(command, object_detections_per_frame, emotions_per_frame, labels_per_frame)
 
             executing_commands = [cmd for cmd in self.commands if cmd.cur_state == cmd.State.EXECUTING]
             for active_cmd in executing_commands:
@@ -108,11 +131,44 @@ class InteractionMaker:
             self.video_writer.write(frame)
             cv2.waitKey(1)
 
-    def update_commands(self, command, detections_per_frame, labels_per_frame):
-        if command.command_type == CommandType.OBJECT_ON_THE_SCREEN:
+    def draw_emotion_box(self, frame, start_point, end_point, emotion: list):
+
+        cv2.rectangle(frame, start_point, end_point, Color.GOLD, 2)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(frame, f'{emotion[1]} - {int(emotion[0] * 100)}', (start_point[0], start_point[1] - 5), font, 1,
+                    Color.YELLOW, 3)
+
+    def update_commands(self, command, detections_per_frame, emotions_per_frame, labels_per_frame):
+        if command.command_type == CommandType.OBJECTS_TRIGGER:
             self.check_object_on_the_screen_event(command, detections_per_frame, labels_per_frame)
-        elif command.command_type == CommandType.REACTIONS_CHAIN:
+        elif command.command_type == CommandType.REACTION_CHAIN_TRIGGER:
             self.check_reactions_chain_event(command, detections_per_frame, labels_per_frame)
+        elif command.command_type == CommandType.EMOTION_TRIGGER:
+            self.check_emotion_event(command, detections_per_frame, emotions_per_frame, labels_per_frame)
+
+    def check_emotion_event(self, command: Command, detections_per_frame, emotions_per_frame, labels_per_frame):
+        # emotions_per_frame format - [(start_point, end_point, [prob, emotion]), ...]
+        # check whether there's main object
+        if command.attached_character_class in labels_per_frame:
+            # check whether there's expected emotion
+            expected_emotions = [emotion for emotion in emotions_per_frame if emotion[2][1] == command.emotion]
+            # check whether an emotion box is inside main object
+            main_object_box = self.get_coords(command, detections_per_frame, labels_per_frame)
+            main_object_box = (main_object_box[:2]), (main_object_box[2:])
+            emotion = [emotion for emotion in expected_emotions if self.is_rect_inside_rect((emotion[0], emotion[1]), main_object_box)]
+            assert len(emotion) <= 1
+            if emotion:
+                coords = *emotion[0][0], *emotion[0][1]
+                self.update_state(True, command, detections_per_frame, labels_per_frame, coords=coords)
+
+
+
+
+    def is_rect_inside_rect(self, in_rect: tuple, out_rect: tuple):
+        lt_in_box_point_inside_out_box = all([out_rect[0][i] <= in_rect[0][i] <= out_rect[1][i] for i in range(2)])
+        rb_in_box_point_inside_out_box = all([out_rect[0][i] <= in_rect[0][i] <= out_rect[1][i] for i in range(2)])
+        return lt_in_box_point_inside_out_box and rb_in_box_point_inside_out_box
+
 
     def check_reactions_chain_event(self, command: Command, detections_per_frame, labels_per_frame):
         # there's main object
@@ -131,13 +187,13 @@ class InteractionMaker:
         event_happened = desired_classes.issubset(labels_per_frame)
         self.update_state(event_happened, command, detections_per_frame, labels_per_frame)
 
-    def update_state(self, event_happened, command, detections_per_frame, labels_per_frame):
+    def update_state(self, event_happened, command, detections_per_frame, labels_per_frame, coords=None):
         if event_happened:
             if command.cur_state == command.State.WAITING:
                 command.set_as_delaying(self.video_reader.one_frame_duration)
                 return
 
-            coords = self.get_coords(command, detections_per_frame, labels_per_frame)
+            coords = self.get_coords(command, detections_per_frame, labels_per_frame) if not coords else coords
             if command.cur_state == command.State.EXECUTING:
                 command.overlay.set_coords(coords)
 
@@ -158,7 +214,6 @@ class InteractionMaker:
     def get_coords(command: Command, detections_per_frame, labels_per_frame):
         main_box = detections_per_frame[labels_per_frame.index(command.attached_character_class)][1]
         coords = main_box
-
         if command.centered:
             secondary_box = detections_per_frame[labels_per_frame.index(command.relation_class)][1]
             main_box_center = [(main_box[i + 2] + main_box[i]) // 2 for i in range(2)]
@@ -173,7 +228,6 @@ class InteractionMaker:
         duration = command.media.duration if command.duration == 0 else command.duration
         return VideoOverlay(video_cap, duration, coords, self.video_reader.one_frame_duration)
 
-
     def generate_image_overlay_object(self, command: Command, coords: tuple):
         image = cv2.imread(command.media.file_name)
         return ImageOverlay(image, command.duration, coords, self.video_reader.one_frame_duration)
@@ -181,7 +235,7 @@ class InteractionMaker:
     def generate_text_overlay_object(self, command: Command, coords: tuple):
         texts = self.read_text_from_file(command.media.file_name)
         ellipse, text_rect = generate_thought_balloon_by_text(texts)
-
+        print(coords)
         return TextOverlay((ellipse, text_rect), command.duration, coords, self.video_reader.one_frame_duration)
 
     def read_text_from_file(self, txt_file):

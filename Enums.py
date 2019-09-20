@@ -7,5 +7,7 @@ class MediaType(Enum):
     VIDEO = auto()
 
 class CommandType(Enum):
-    OBJECT_ON_THE_SCREEN = 0
-    REACTIONS_CHAIN = 1
+    OBJECTS_TRIGGER = 0
+    REACTION_CHAIN_TRIGGER = 1
+    EMOTION_TRIGGER = 2
+

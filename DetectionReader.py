@@ -11,3 +11,4 @@ class DetectionReader:
 
     def close(self):
         self.json_data.close()
+

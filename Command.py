@@ -2,7 +2,7 @@ from enum import Enum, auto
 
 from Media import Media
 from Timer import Timer
-from Types import CommandType
+from Enums import CommandType
 
 
 class Command:
@@ -12,11 +12,10 @@ class Command:
         DELAYING = auto()
         AFTER_DELAYING = auto()
 
-    def __init__(self, name, centered, type, trigger_event, attached_character_class, relation_class,
-                 command_type: CommandType, trigger_cmd_name, media: Media, duration, delay):
+    def __init__(self, name, centered, trigger_event, attached_character_class, relation_class,
+                 command_type: CommandType, trigger_cmd_name, media: Media, duration, delay, emotion):
         self.centered = centered
         self.name = name
-        self.type = type
         self.trigger_event = trigger_event
         self.attached_character_class = attached_character_class
         self.relation_class = relation_class
@@ -25,6 +24,7 @@ class Command:
         self.media = media
         self.duration = duration
         self.delay = delay
+        self.emotion = emotion
         self.delay_timer = None
         self.cur_state = self.State.WAITING
         self.overlay = None

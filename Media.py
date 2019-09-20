@@ -1,4 +1,4 @@
-from Types import MediaType
+from Enums import MediaType
 
 class Media:
 

@@ -55,6 +55,7 @@ def overlay_text_on_frame(frame, ellipse: list, text_rect: np.ndarray, box: tupl
 
 def draw_det_boxes(frame, boxes):
     for box in boxes:
+        #print(box)
         cv2.rectangle(frame, tuple(box[1][:2]), tuple(box[1][2:]), Color.YELLOW, 5)
 
 
@@ -62,7 +63,7 @@ def generate_thought_balloon_by_text(texts: list):
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 2
     color = Color.BLACK
-    thickness = 2
+    thickness = 4
     LINE_SPACING = 8
     text_settings = []
     for text in texts:
@@ -93,10 +94,16 @@ def generate_thought_balloon_by_text(texts: list):
     return ellipse, text_rect
 
 
-def overlay_img_in_top_right_frame_corner(frame, image):
+def overlay_img_in_top_right_frame_corner(frame, image, coords):
     print('frame shape', frame.shape)
     print('image shape', image.shape)
     frame_height, frame_width, _ = frame.shape
     image_height, image_width, _ = image.shape
     assert image_height <= frame_height and image_width <= frame_width
-    frame[:image_height, frame_width-image_width:] = image
+
+    available_width = frame_width - coords[2]
+    if available_width < image_width:
+        new_width = available_width
+        new_height = int(image_height * new_width / image_width)
+        image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+    frame[:image.shape[0], frame_width-image.shape[1]:] = image

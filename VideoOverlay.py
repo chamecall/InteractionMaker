@@ -14,7 +14,7 @@ class VideoOverlay(Overlay):
         if not captured:
             return False
 
-        overlay_img_in_top_right_frame_corner(frame, inner_frame)
+        overlay_img_in_top_right_frame_corner(frame, inner_frame, self.coords)
         return self.dec_duration()
 
     def dec_duration(self):
