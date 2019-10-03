@@ -13,8 +13,14 @@ from TextOverlay import TextOverlay
 from VideoOverlay import VideoOverlay
 from VideoReader import VideoReader
 from pprint import pprint
+from FaceRecognizer import FaceRecognizer
+from EmotionRecognizer import EmotionRecognizer
+from Captioner import Captioner
+from Focuser import Focuser
+
 
 class InteractionMaker:
+    EMOTION_PROB_THRESH = 0
 
     def __init__(self):
         self.detection_reader = DetectionReader('detections.json')
@@ -27,11 +33,15 @@ class InteractionMaker:
         self.db_user_pass = 'root'
         self.db_host = 'localhost'
         self.commands = []
-        self.output_video_file_name = 'output.mkv'
+        self.output_video_file_name = '/home/algernon/samba/video_queue/AIVlog/output/output.mkv'
         self.video_reader = None
         self.video_writer = None
         self.emotion_detection_reader = DetectionReader('emotion_results/er.json')
-
+        self.emotion_recognizer = EmotionRecognizer(self.EMOTION_PROB_THRESH)
+        self.captioner = Captioner('/home/algernon/a-PyTorch-Tutorial-to-Image-Captioning/weights/BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar',
+                                   '/home/algernon/a-PyTorch-Tutorial-to-Image-Captioning/weights/WORDMAP_coco_5_cap_per_img_5_min_word_freq.json')
+        self.focuser = Focuser(batch_size=5)
+        self.face_recognizer = FaceRecognizer()
         self.open_project()
         self.recognizer = Recognizer(
             '/home/algernon/PycharmProjects/AIVlog/mmdetection/configs/pascal_voc/faster_rcnn_r50_fpn_1x_voc0712.py',
@@ -41,7 +51,7 @@ class InteractionMaker:
         with open(self.project_file_name, 'r') as project_file:
             self.video_file_name = project_file.readline().strip()
             self.db_name = project_file.readline().strip()
-
+            print(self.video_file_name)
             self.data_base = DB(self.db_host, self.db_user_name, self.db_user_pass, self.db_name)
             self.video_reader = VideoReader(self.video_file_name)
             self.video_writer = cv2.VideoWriter(self.output_video_file_name, cv2.VideoWriter_fourcc(*"XVID"),
@@ -95,19 +105,18 @@ class InteractionMaker:
         while True:
             frame = self.video_reader.get_next_frame()
             cur_frame_num = self.video_reader.cur_frame_num
-            # detections_per_frame = self.detection_reader.get_detections_per_specified_frame(cur_frame_num)
-            emotion_detections_per_frame = self.emotion_detection_reader.get_detections_per_specified_frame(
-                cur_frame_num - 1)
-            emotions_per_frame = []
-            for person in emotion_detections_per_frame:
-                possible_emotions = person['emotions']
-                most_possible_emotion = max(possible_emotions, key=lambda emotion: emotion[0])
-                start_point = person['x'], person['y']
-                end_point = start_point[0] + person['w'], start_point[1] + person['h']
-                emotions_per_frame.append((start_point, end_point, most_possible_emotion))
-                self.draw_emotion_box(frame, start_point, end_point, most_possible_emotion)
+            #emotion_detections = self.detect_emotions_on_frame(frame)
+            emotion_detections = []
 
-            _, object_detections_per_frame = self.recognizer.inference(frame)
+            self.focuser.push_frame(frame)
+
+            emotions_per_frame = []
+            for emotion_pos, emotion in emotion_detections:
+                emotions_per_frame.append((emotion_pos, emotion))
+                self.draw_emotion_box(frame, emotion_pos, emotion)
+
+            #_, object_detections_per_frame = self.recognizer.inference(frame)
+            object_detections_per_frame = []
             draw_det_boxes(frame, object_detections_per_frame)
 
             labels_per_frame = [detection[0] for detection in object_detections_per_frame]
@@ -127,15 +136,33 @@ class InteractionMaker:
                 if delaying_command.wait_out_delay():
                     delaying_command.set_as_after_delay()
 
+
+            most_clear_img = self.focuser.get_most_clear_frame()
+            caption = self.captioner.caption_img(most_clear_img)
+            cv2.putText(frame, caption, (0, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, Color.GOLD, 2)
+
             cv2.imshow('frame', frame)
             self.video_writer.write(frame)
             cv2.waitKey(1)
 
-    def draw_emotion_box(self, frame, start_point, end_point, emotion: list):
 
-        cv2.rectangle(frame, start_point, end_point, Color.GOLD, 2)
+    def detect_emotions_on_frame(self, frame):
+        #return list of items of the following format: ((lt_point: tuple, rb_point: tuple), (emotion: str, prob: int))
+        detected_faces = self.face_recognizer.recognize_faces_on_image(frame)
+        emotions = []
+        for face_pos in detected_faces:
+            (l, t), (r, b) = face_pos
+            face_img = frame[t:b, l:r]
+            emotion = self.emotion_recognizer.recognize_emotion_by_face(face_img)
+            if emotion:
+                emotions.append((face_pos, emotion))
+        return emotions
+
+    def draw_emotion_box(self, frame, emotion_pos, emotion: list):
+
+        cv2.rectangle(frame, *emotion_pos, Color.GOLD, 2)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(frame, f'{emotion[1]} - {int(emotion[0] * 100)}', (start_point[0], start_point[1] - 5), font, 1,
+        cv2.putText(frame, f'{emotion[0]} - {emotion[1]}', (emotion_pos[0][0], emotion_pos[0][1] - 5), font, 1,
                     Color.YELLOW, 3)
 
     def update_commands(self, command, detections_per_frame, emotions_per_frame, labels_per_frame):
@@ -146,20 +173,21 @@ class InteractionMaker:
         elif command.command_type == CommandType.EMOTION_TRIGGER:
             self.check_emotion_event(command, detections_per_frame, emotions_per_frame, labels_per_frame)
 
-    def check_emotion_event(self, command: Command, detections_per_frame, emotions_per_frame, labels_per_frame):
-        # emotions_per_frame format - [(start_point, end_point, [prob, emotion]), ...]
+    def check_emotion_event(self, command: Command, objects_detections, emotion_detections, labels_per_frame):
+        # emotions_per_frame format - [((start_point, end_point), (emotion, prob)), ...]
         # check whether there's main object
         if command.attached_character_class in labels_per_frame:
             # check whether there's expected emotion
-            expected_emotions = [emotion for emotion in emotions_per_frame if emotion[2][1] == command.emotion]
+            expected_emotions = [emotion for emotion in emotion_detections if emotion[1][0] == command.emotion]
             # check whether an emotion box is inside main object
-            main_object_box = self.get_coords(command, detections_per_frame, labels_per_frame)
+            main_object_box = self.get_coords(command, objects_detections, labels_per_frame)
             main_object_box = (main_object_box[:2]), (main_object_box[2:])
-            emotion = [emotion for emotion in expected_emotions if self.is_rect_inside_rect((emotion[0], emotion[1]), main_object_box)]
+            emotion = [emotion for emotion in expected_emotions if self.is_rect_inside_rect((emotion[0][0], emotion[0][1]), main_object_box)]
             assert len(emotion) <= 1
             if emotion:
-                coords = *emotion[0][0], *emotion[0][1]
-                self.update_state(True, command, detections_per_frame, labels_per_frame, coords=coords)
+                print(emotion)
+                coords = *emotion[0][0][0], *emotion[0][0][1]
+                self.update_state(True, command, objects_detections, labels_per_frame, coords=coords)
 
 
 
@@ -235,7 +263,6 @@ class InteractionMaker:
     def generate_text_overlay_object(self, command: Command, coords: tuple):
         texts = self.read_text_from_file(command.media.file_name)
         ellipse, text_rect = generate_thought_balloon_by_text(texts)
-        print(coords)
         return TextOverlay((ellipse, text_rect), command.duration, coords, self.video_reader.one_frame_duration)
 
     def read_text_from_file(self, txt_file):

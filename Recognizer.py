@@ -4,7 +4,6 @@ import matplotlib
 
 
 #mmcv_image.imshow = imshow
-from mmdet.models import build_detector
 from mmdet.apis import inference_detector, show_result, init_detector
 
 
