@@ -16,8 +16,8 @@ from pprint import pprint
 from FaceRecognizer import FaceRecognizer
 from EmotionRecognizer import EmotionRecognizer
 from Captioner import Captioner
-from Focuser import Focuser
-
+from SceneSegmentator import SceneSegmentator
+from tqdm import trange
 
 class InteractionMaker:
     EMOTION_PROB_THRESH = 0
@@ -33,14 +33,14 @@ class InteractionMaker:
         self.db_user_pass = 'root'
         self.db_host = 'localhost'
         self.commands = []
-        self.output_video_file_name = '/home/algernon/samba/video_queue/AIVlog/output/output.mkv'
+        self.output_video_file_name = 'output.mkv'
         self.video_reader = None
         self.video_writer = None
         self.emotion_detection_reader = DetectionReader('emotion_results/er.json')
         self.emotion_recognizer = EmotionRecognizer(self.EMOTION_PROB_THRESH)
         self.captioner = Captioner('/home/algernon/a-PyTorch-Tutorial-to-Image-Captioning/weights/BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar',
                                    '/home/algernon/a-PyTorch-Tutorial-to-Image-Captioning/weights/WORDMAP_coco_5_cap_per_img_5_min_word_freq.json')
-        self.focuser = Focuser(batch_size=5)
+        self.segmentator = None
         self.face_recognizer = FaceRecognizer()
         self.open_project()
         self.recognizer = Recognizer(
@@ -51,12 +51,12 @@ class InteractionMaker:
         with open(self.project_file_name, 'r') as project_file:
             self.video_file_name = project_file.readline().strip()
             self.db_name = project_file.readline().strip()
-            print(self.video_file_name)
             self.data_base = DB(self.db_host, self.db_user_name, self.db_user_pass, self.db_name)
             self.video_reader = VideoReader(self.video_file_name)
             self.video_writer = cv2.VideoWriter(self.output_video_file_name, cv2.VideoWriter_fourcc(*"XVID"),
                                                 self.video_reader.fps,
                                                 (self.video_reader.width, self.video_reader.height))
+            self.segmentator = SceneSegmentator(self.video_reader.fps * 5)
             self.load_commands_from_db()
 
     def load_commands_from_db(self):
@@ -102,13 +102,13 @@ class InteractionMaker:
 
 
     def process_commands(self):
-        while True:
+        for _ in trange(self.video_reader.frame_count):
             frame = self.video_reader.get_next_frame()
             cur_frame_num = self.video_reader.cur_frame_num
             #emotion_detections = self.detect_emotions_on_frame(frame)
             emotion_detections = []
 
-            self.focuser.push_frame(frame)
+            self.segmentator.push_frame(frame)
 
             emotions_per_frame = []
             for emotion_pos, emotion in emotion_detections:
@@ -137,7 +137,7 @@ class InteractionMaker:
                     delaying_command.set_as_after_delay()
 
 
-            most_clear_img = self.focuser.get_most_clear_frame()
+            most_clear_img = self.segmentator.get_most_clear_frame()
             caption = self.captioner.caption_img(most_clear_img)
             cv2.putText(frame, caption, (0, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, Color.GOLD, 2)
 
