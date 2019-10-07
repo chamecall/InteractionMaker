@@ -17,6 +17,7 @@ from FaceRecognizer import FaceRecognizer
 from EmotionRecognizer import EmotionRecognizer
 from Captioner import Captioner
 from SceneSegmentator import SceneSegmentator
+from ClothesDetector import ClothesDetector
 from tqdm import trange
 
 class InteractionMaker:
@@ -41,6 +42,7 @@ class InteractionMaker:
         self.captioner = Captioner('/home/algernon/a-PyTorch-Tutorial-to-Image-Captioning/weights/BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar',
                                    '/home/algernon/a-PyTorch-Tutorial-to-Image-Captioning/weights/WORDMAP_coco_5_cap_per_img_5_min_word_freq.json')
         self.segmentator = None
+        self.clothes_detector = ClothesDetector("yolo/df2cfg/yolov3-df2.cfg", "yolo/weights/yolov3-df2_15000.weights", "yolo/df2cfg/df2.names")
         self.face_recognizer = FaceRecognizer()
         self.open_project()
         self.recognizer = Recognizer(
@@ -108,8 +110,9 @@ class InteractionMaker:
             #emotion_detections = self.detect_emotions_on_frame(frame)
             emotion_detections = []
 
-            self.segmentator.push_frame(frame)
-
+            #self.segmentator.push_frame(frame)
+            clothes_detections = self.clothes_detector.detect_clothes(frame)
+            self.draw_clothes(frame, clothes_detections)
             emotions_per_frame = []
             for emotion_pos, emotion in emotion_detections:
                 emotions_per_frame.append((emotion_pos, emotion))
@@ -136,15 +139,27 @@ class InteractionMaker:
                 if delaying_command.wait_out_delay():
                     delaying_command.set_as_after_delay()
 
-
-            most_clear_img = self.segmentator.get_most_clear_frame()
-            caption = self.captioner.caption_img(most_clear_img)
-            cv2.putText(frame, caption, (0, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, Color.GOLD, 2)
+            #self.show_caption(frame)
 
             cv2.imshow('frame', frame)
             self.video_writer.write(frame)
             cv2.waitKey(1)
 
+
+    def show_caption(self, frame):
+        most_clear_img = self.segmentator.get_most_clear_frame()
+        caption = self.captioner.caption_img(most_clear_img)
+        cv2.putText(frame, caption, (0, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, Color.GOLD, 2)
+
+    def draw_clothes(self, frame, clothes_detections):
+        # clothes_detections: [[label: str, ((x1, y1), (x2, y2)), prob], ..]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        color = Color.BLACK
+        for label, ((x1, y1), (x2, y2)), prob in clothes_detections:
+            text = f'{label} ({prob}%)'
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+            cv2.rectangle(frame, (x1 - 2, y1 - 25), (x1 + 8.5 * len(text), y1), color, -1)
+            cv2.putText(frame, text, (x1, y1 - 5), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
     def detect_emotions_on_frame(self, frame):
         #return list of items of the following format: ((lt_point: tuple, rb_point: tuple), (emotion: str, prob: int))
